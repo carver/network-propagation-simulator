@@ -20,7 +20,7 @@
             border-radius: 8px;
             box-shadow: 0 0 10px rgba(0,0,0,0.1);
             width: 90%;
-            max-width: 800px;
+            max-width: 850px;
         }
         .controls, .stats {
             margin-bottom: 20px;
@@ -83,7 +83,7 @@
         <h1>P2P Data Propagation Simulator</h1>
 
         <div class="controls">
-            <h2>Configuration</h2>
+            <h2>Pre-setup Configuration</h2>
             <label for="numNodes">Number of Nodes:</label>
             <input type="number" id="numNodes" value="1000" min="10">
 
@@ -93,12 +93,17 @@
             <label for="peersPerBucket">Peers per Bucket (K):</label>
             <input type="number" id="peersPerBucket" value="16" min="1" max="20" readonly> <!-- Kademlia typically uses K=20, but question specified 16 -->
 
-            <label for="bucketsToSelect">Buckets to Select for Propagation:</label>
-            <input type="number" id="bucketsToSelect" value="8" min="1">
             <br>
             <button id="setupButton">Setup Network</button>
-            <button id="simulateButton" disabled>Start Simulation</button>
             <button id="resetButton">Reset All</button>
+        </div>
+
+        <div class="controls">
+            <h2>Simulation Configuration</h2>
+            <label for="reGossipCount">Number of peers to gossip to</label>
+            <input type="number" id="reGossipCount" value="8" min="1">
+            <br>
+            <button id="simulateButton" disabled>Start Simulation</button>
         </div>
 
         <div class="stats">
@@ -126,7 +131,6 @@
         let peers = new Map(); // Map of peerId (BigInt) to Peer object
         let totalNodes = 0;
         let initialDataHoldersCount = 0;
-        let bucketsToSelectForPropagation = 8;
 
         let currentRound = 0;
         let peersWithDataCount = 0;
@@ -140,7 +144,6 @@
         const numNodesInput = document.getElementById('numNodes');
         const initialHoldersInput = document.getElementById('initialHolders');
         // const peersPerBucketInput = document.getElementById('peersPerBucket'); // Not used, fixed BUCKET_SIZE
-        const bucketsToSelectInput = document.getElementById('bucketsToSelect');
         const setupButton = document.getElementById('setupButton');
         const simulateButton = document.getElementById('simulateButton');
         const resetButton = document.getElementById('resetButton');
@@ -213,21 +216,18 @@
              * Selects peers to propagate data to, according to the rules.
              * @returns {BigInt[]} - Array of peer IDs to send data to.
              */
-            selectPeersForPropagation() {
-              return Array.from(this.selectSplitPeersForPropagation(bucketsToSelectForPropagation));
+            selectPeersForPropagation(numToGossip) {
+              return Array.from(this.selectSplitPeersForPropagation(numToGossip));
             }
-            selectRandom() {
-              return Array.from(this.selectRandomPeersForPropagation(bucketsToSelectForPropagation));
-            }
-            selectSplitPeersForPropagation() {
+            selectSplitPeersForPropagation(numToGossip) {
 
                 // Split bucket selection into two strategies:
                 // - Randomly select N buckets and pick one random peer from each.
                 // - Select N closest peers to self
-                let numRandomPeers = 4; //bucketsToSelectForPropagation / 2;
+                let numRandomPeers = Math.floor(numToGossip / 2);
                 let randomPeers = this.selectRandomPeersForPropagation(numRandomPeers);
-                let closestPeers = this.selectClosestPeersForPropagation(bucketsToSelectForPropagation - numRandomPeers);
-                //let closestPeers = this.selectRandomPeersFromClosestBuckets(bucketsToSelectForPropagation - numRandomPeers);
+                let closestPeers = this.selectClosestPeersForPropagation(numToGossip - numRandomPeers);
+                //let closestPeers = this.selectRandomPeersFromClosestBuckets(numToGossip - numRandomPeers);
                 return Array.from(randomPeers.union(closestPeers));
             }
 
@@ -382,7 +382,6 @@
             peers.clear();
             totalNodes = parseInt(numNodesInput.value);
             initialDataHoldersCount = parseInt(initialHoldersInput.value);
-            bucketsToSelectForPropagation = parseInt(bucketsToSelectInput.value);
 
             if (initialDataHoldersCount > totalNodes) {
                 initialDataHoldersCount = totalNodes;
@@ -509,8 +508,9 @@
             let newlyInformedCountThisRound = 0;
             const newReceiversInThisRound = new Set(); // To track who receives data in *this* round specifically
 
+            const reGossipCount = document.getElementById('reGossipCount').value;
             for (const propagatingPeer of peersWhoCanPropagate) {
-                const targets = propagatingPeer.selectPeersForPropagation();
+                const targets = propagatingPeer.selectPeersForPropagation(reGossipCount);
                 for (const targetId of targets) {
                     const targetPeer = peers.get(targetId);
                     if (targetPeer && !targetPeer.hasData) {
