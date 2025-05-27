@@ -180,12 +180,7 @@
                     // For this simulation, we just fill up to K. If full, new distinct peers are ignored.
                 }
             }
-
-            /**
-             * Selects peers to propagate data to, according to the rules.
-             * @returns {BigInt[]} - Array of peer IDs to send data to.
-             */
-            selectPeersForPropagation() {
+            selectRandomPeersForPropagation(numBuckets) {
                 const targets = new Set(); // Use a Set to avoid duplicates if a bucket is selected twice (unlikely with random distinct selection)
 
                 // Get non-empty bucket indices
@@ -200,7 +195,7 @@
 
                 // Shuffle and select N buckets (or fewer if not enough non-empty buckets)
                 const shuffledBucketIndices = shuffleArray(nonEmptyBucketIndices);
-                const numBucketsToActuallySelect = Math.min(bucketsToSelectForPropagation, shuffledBucketIndices.length);
+                const numBucketsToActuallySelect = Math.min(numBuckets, shuffledBucketIndices.length);
 
                 for (let i = 0; i < numBucketsToActuallySelect; i++) {
                     const bucketIndex = shuffledBucketIndices[i];
@@ -210,7 +205,108 @@
                         targets.add(randomPeerIdInBucket);
                     }
                 }
-                return Array.from(targets);
+                return targets;
+            }
+
+
+            /**
+             * Selects peers to propagate data to, according to the rules.
+             * @returns {BigInt[]} - Array of peer IDs to send data to.
+             */
+            selectPeersForPropagation() {
+              return Array.from(this.selectSplitPeersForPropagation(bucketsToSelectForPropagation));
+            }
+            selectRandom() {
+              return Array.from(this.selectRandomPeersForPropagation(bucketsToSelectForPropagation));
+            }
+            selectSplitPeersForPropagation() {
+
+                // Split bucket selection into two strategies:
+                // - Randomly select N buckets and pick one random peer from each.
+                // - Select N closest peers to self
+                let numRandomPeers = 4; //bucketsToSelectForPropagation / 2;
+                let randomPeers = this.selectRandomPeersForPropagation(numRandomPeers);
+                let closestPeers = this.selectClosestPeersForPropagation(bucketsToSelectForPropagation - numRandomPeers);
+                //let closestPeers = this.selectRandomPeersFromClosestBuckets(bucketsToSelectForPropagation - numRandomPeers);
+                return Array.from(randomPeers.union(closestPeers));
+            }
+
+            selectClosestPeersForPropagation(numPeers) {
+                let closestPeers = new Set();
+
+                const nonEmptyBucketIndices = [];
+                for (let i = this.buckets.length-1; i >= 0; i--) {
+                    if (this.buckets[i].length > 0) {
+                      for (let peerIdx = 0; peerIdx < this.buckets[i].length; peerIdx++) {
+                        const peerId = this.buckets[i][peerIdx];
+                        if (peerId !== this.id) { // Don't select self
+                            closestPeers.add(peerId);
+                        }
+                        if (closestPeers.size >= numPeers) {
+                          return closestPeers;
+                        }
+                      }
+                    }
+                }
+                return closestPeers;
+            }
+            selectRandomPeersFromClosestBuckets(numBuckets) {
+                const targets = new Set(); // Use a Set to avoid duplicates if a bucket is selected twice (unlikely with random distinct selection)
+
+                // Get non-empty bucket indices
+                const nonEmptyBucketIndices = [];
+                for (let i = this.buckets.length - 1; i > 0; i--) {
+                    if (this.buckets[i].length > 0) {
+                        nonEmptyBucketIndices.push(i);
+                        if (nonEmptyBucketIndices.length >= numBuckets) {
+                            break; // Stop if we have enough non-empty buckets
+                        }
+                    }
+                }
+
+                if (nonEmptyBucketIndices.length === 0) return new Set();
+
+                // Shuffle and select N buckets (or fewer if not enough non-empty buckets)
+                const numBucketsToActuallySelect = Math.min(numBuckets, nonEmptyBucketIndices.length);
+
+                for (let i = 0; i < nonEmptyBucketIndices.length; i++) {
+                    const bucketIndex = nonEmptyBucketIndices[i];
+                    const bucket = this.buckets[bucketIndex];
+                    if (bucket.length > 0) {
+                        const randomPeerIdInBucket = bucket[Math.floor(Math.random() * bucket.length)];
+                        targets.add(randomPeerIdInBucket);
+                    }
+                }
+                return targets;
+            }
+            selectRandomPeersFromFurthestBuckets(numBuckets) {
+                const targets = new Set(); // Use a Set to avoid duplicates if a bucket is selected twice (unlikely with random distinct selection)
+
+                // Get non-empty bucket indices
+                const nonEmptyBucketIndices = [];
+                for (let i = 0; i < this.buckets.length; i++) {
+                    if (this.buckets[i].length > 0) {
+                        nonEmptyBucketIndices.push(i);
+                        if (nonEmptyBucketIndices.length >= numBuckets) {
+                            break; // Stop if we have enough non-empty buckets
+                        }
+                    }
+                }
+
+                if (nonEmptyBucketIndices.length === 0) return new Set();
+
+                // Shuffle and select N buckets (or fewer if not enough non-empty buckets)
+                const numBucketsToActuallySelect = Math.min(numBuckets, nonEmptyBucketIndices.length);
+
+                for (let i = 0; i < nonEmptyBucketIndices.length; i++) {
+                    const bucketIndex = nonEmptyBucketIndices[i];
+                    const bucket = this.buckets[bucketIndex];
+                    if (bucket.length > 0) {
+                        const randomPeerIdInBucket = bucket[Math.floor(Math.random() * bucket.length)];
+                        targets.add(randomPeerIdInBucket);
+                    }
+                }
+                return targets;
             }
         }
 
@@ -242,9 +338,10 @@
 
             const xorDistance = hostPeerId ^ otherPeerId;
 
-            // Find the index of the least significant bit that is different.
+            // Find the index of the most significant bit that is different.
             for (let i = 0; i < ID_BITS; i++) {
-                if ((xorDistance >> BigInt(i)) & 1n) {
+              const shift = ID_BITS - i - 1; // Shift to get the i-th bit
+                if ((xorDistance >> BigInt(shift)) & 1n) {
                     return i;
                 }
             }
@@ -390,7 +487,7 @@
         /**
          * Runs a single round of the simulation.
          */
-        function runSimulationRound() {
+        function runSimulationRound(peersWhoCanPropagate) {
             if (simulationComplete || peers.size === 0) {
                 simulationRunning = false;
                 updateSimulateButtonState();
@@ -399,13 +496,6 @@
 
             currentRound++;
             logMessage(`--- Starting Round ${currentRound} ---`);
-
-            const peersWhoCanPropagate = [];
-            peers.forEach(peer => {
-                if (peer.hasData) {
-                    peersWhoCanPropagate.push(peer);
-                }
-            });
 
             if (peersWhoCanPropagate.length === 0 && peersWithDataCount > 0) {
                 // This should not happen if data exists, unless no one can propagate.
@@ -449,6 +539,8 @@
             updateStatsDisplay();
             drawChart();
 
+            // logStatsOfRandomPeer()
+
             if (peersWithDataCount === totalNodes) {
                 simulationComplete = true;
                 simulationRunning = false;
@@ -466,7 +558,7 @@
 
             if (simulationRunning) {
                 // Schedule next round
-                setTimeout(runSimulationRound, 100); // Delay for visualization, adjust as needed
+                setTimeout(function () { runSimulationRound(newReceiversInThisRound); }, 100); // Delay for visualization, adjust as needed
             }
         }
 
@@ -521,7 +613,15 @@
             }
 
             updateSimulateButtonState();
-            runSimulationRound(); // Start the first round
+
+            const peersWhoCanPropagate = [];
+            peers.forEach(peer => {
+                if (peer.hasData) {
+                    peersWhoCanPropagate.push(peer);
+                }
+            });
+
+            runSimulationRound(peersWhoCanPropagate); // Start the first round
         }
 
         function updateSimulateButtonState() {
@@ -684,10 +784,12 @@
         });
 
         resetButton.addEventListener('click', () => {
-            // Full reset: configuration, network, simulation state
+            // Full reset: network, simulation state
+            /*
             numNodesInput.value = "1000";
             initialHoldersInput.value = "3";
             bucketsToSelectInput.value = "8";
+            */
 
             peers.clear();
             networkInitialized = false;
