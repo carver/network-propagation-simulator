@@ -1,0 +1,722 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>P2P Data Propagation Simulator</title>
+    <style>
+        body {
+            font-family: sans-serif;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            margin: 0;
+            padding: 20px;
+            background-color: #f4f4f4;
+        }
+        .container {
+            background-color: white;
+            padding: 20px;
+            border-radius: 8px;
+            box-shadow: 0 0 10px rgba(0,0,0,0.1);
+            width: 90%;
+            max-width: 800px;
+        }
+        .controls, .stats {
+            margin-bottom: 20px;
+            padding: 10px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+        }
+        .controls label, .controls input, .controls button {
+            margin-right: 10px;
+            margin-bottom: 10px;
+        }
+        .controls input[type="number"] {
+            width: 80px;
+        }
+        #chartContainer {
+            width: 100%;
+            height: 400px;
+            border: 1px solid #ccc;
+            margin-top: 20px;
+            position: relative; /* For canvas positioning */
+        }
+        canvas {
+            display: block;
+        }
+        h1, h2 {
+            text-align: center;
+            color: #333;
+        }
+        button {
+            padding: 10px 15px;
+            background-color: #007bff;
+            color: white;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            transition: background-color 0.3s ease;
+        }
+        button:hover {
+            background-color: #0056b3;
+        }
+        button:disabled {
+            background-color: #ccc;
+            cursor: not-allowed;
+        }
+        .log-area {
+            margin-top: 20px;
+            padding: 10px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            max-height: 200px;
+            overflow-y: auto;
+            background-color: #f9f9f9;
+            font-size: 0.9em;
+            white-space: pre-wrap; /* To respect newlines and spaces */
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>P2P Data Propagation Simulator</h1>
+
+        <div class="controls">
+            <h2>Configuration</h2>
+            <label for="numNodes">Number of Nodes:</label>
+            <input type="number" id="numNodes" value="1000" min="10">
+
+            <label for="initialHolders">Initial Data Holders:</label>
+            <input type="number" id="initialHolders" value="3" min="1">
+
+            <label for="peersPerBucket">Peers per Bucket (K):</label>
+            <input type="number" id="peersPerBucket" value="16" min="1" max="20" readonly> <!-- Kademlia typically uses K=20, but question specified 16 -->
+
+            <label for="bucketsToSelect">Buckets to Select for Propagation:</label>
+            <input type="number" id="bucketsToSelect" value="8" min="1">
+            <br>
+            <button id="setupButton">Setup Network</button>
+            <button id="simulateButton" disabled>Start Simulation</button>
+            <button id="resetButton">Reset All</button>
+        </div>
+
+        <div class="stats">
+            <h2>Simulation Status</h2>
+            <p>Round: <span id="currentRound">0</span></p>
+            <p>Peers with Data: <span id="peersWithData">0</span> / <span id="totalPeersStat">0</span> (<span id="percentagePeersWithData">0.00</span>%)</p>
+            <p>Status: <span id="simulationStatus">Idle</span></p>
+        </div>
+
+        <div id="chartContainer">
+            <canvas id="propagationChart"></canvas>
+        </div>
+
+        <div class="log-area" id="logArea">
+            Welcome to the P2P Simulator! Configure and click "Setup Network".
+        </div>
+    </div>
+
+    <script>
+        // --- Configuration Constants ---
+        const BUCKET_SIZE = 16; // Max peers per bucket (K) - from prompt
+        const ID_BITS = 64;     // 64-bit IDs
+
+        // --- Global State ---
+        let peers = new Map(); // Map of peerId (BigInt) to Peer object
+        let totalNodes = 0;
+        let initialDataHoldersCount = 0;
+        let bucketsToSelectForPropagation = 8;
+
+        let currentRound = 0;
+        let peersWithDataCount = 0;
+        let simulationRunning = false;
+        let simulationComplete = false;
+        let networkInitialized = false;
+
+        let chartData = []; // Array of { round, count, percentage }
+
+        // --- DOM Elements ---
+        const numNodesInput = document.getElementById('numNodes');
+        const initialHoldersInput = document.getElementById('initialHolders');
+        // const peersPerBucketInput = document.getElementById('peersPerBucket'); // Not used, fixed BUCKET_SIZE
+        const bucketsToSelectInput = document.getElementById('bucketsToSelect');
+        const setupButton = document.getElementById('setupButton');
+        const simulateButton = document.getElementById('simulateButton');
+        const resetButton = document.getElementById('resetButton');
+        const currentRoundDisplay = document.getElementById('currentRound');
+        const peersWithDataDisplay = document.getElementById('peersWithData');
+        const totalPeersStatDisplay = document.getElementById('totalPeersStat');
+        const percentagePeersWithDataDisplay = document.getElementById('percentagePeersWithData');
+        const simulationStatusDisplay = document.getElementById('simulationStatus');
+        const chartCanvas = document.getElementById('propagationChart');
+        const ctx = chartCanvas.getContext('2d');
+        const logArea = document.getElementById('logArea');
+
+        // --- Peer Class ---
+        class Peer {
+            constructor(id) {
+                this.id = id; // BigInt
+                this.buckets = Array.from({ length: ID_BITS }, () => []); // Array of arrays of peer IDs
+                this.hasData = false;
+                // this.propagatedThisRound = false; // To ensure a peer only propagates once per round if needed - current logic is fine
+            }
+
+            /**
+             * Adds a peerId to the appropriate bucket.
+             * @param {BigInt} otherPeerId - The ID of the peer to add.
+             */
+            addPeerToBucket(otherPeerId) {
+                if (this.id === otherPeerId) return; // Don't add self
+
+                const bucketIndex = getBucketIndex(this.id, otherPeerId);
+                if (bucketIndex === -1) return; // Should not happen if IDs are different
+
+                const bucket = this.buckets[bucketIndex];
+                if (!bucket.includes(otherPeerId) && bucket.length < BUCKET_SIZE) {
+                    bucket.push(otherPeerId);
+                } else if (!bucket.includes(otherPeerId) && bucket.length >= BUCKET_SIZE) {
+                    // Optional: Implement replacement strategy (e.g., LRU, ping check)
+                    // For this simulation, we just fill up to K. If full, new distinct peers are ignored.
+                }
+            }
+
+            /**
+             * Selects peers to propagate data to, according to the rules.
+             * @returns {BigInt[]} - Array of peer IDs to send data to.
+             */
+            selectPeersForPropagation() {
+                const targets = new Set(); // Use a Set to avoid duplicates if a bucket is selected twice (unlikely with random distinct selection)
+
+                // Get non-empty bucket indices
+                const nonEmptyBucketIndices = [];
+                for (let i = 0; i < this.buckets.length; i++) {
+                    if (this.buckets[i].length > 0) {
+                        nonEmptyBucketIndices.push(i);
+                    }
+                }
+
+                if (nonEmptyBucketIndices.length === 0) return [];
+
+                // Shuffle and select N buckets (or fewer if not enough non-empty buckets)
+                const shuffledBucketIndices = shuffleArray(nonEmptyBucketIndices);
+                const numBucketsToActuallySelect = Math.min(bucketsToSelectForPropagation, shuffledBucketIndices.length);
+
+                for (let i = 0; i < numBucketsToActuallySelect; i++) {
+                    const bucketIndex = shuffledBucketIndices[i];
+                    const bucket = this.buckets[bucketIndex];
+                    if (bucket.length > 0) {
+                        const randomPeerIdInBucket = bucket[Math.floor(Math.random() * bucket.length)];
+                        targets.add(randomPeerIdInBucket);
+                    }
+                }
+                return Array.from(targets);
+            }
+        }
+
+        // --- Utility Functions ---
+
+        /**
+         * Generates a random 64-bit BigInt ID.
+         * @returns {BigInt}
+         */
+        function generatePeerId() {
+            let idStr = '0b';
+            for (let i = 0; i < ID_BITS; i++) {
+                idStr += Math.random() < 0.5 ? '0' : '1';
+            }
+            return BigInt(idStr);
+        }
+
+        /**
+         * Calculates the Kademlia-style bucket index for otherPeerId from the perspective of hostPeerId.
+         * The 0th bucket is for peers with the opposite 0th bit.
+         * The 1st bucket is for peers with the same 0th bit and opposite 1st bit.
+         * ...and so on.
+         * @param {BigInt} hostPeerId
+         * @param {BigInt} otherPeerId
+         * @returns {number} The bucket index (0 to ID_BITS - 1), or -1 if IDs are identical.
+         */
+        function getBucketIndex(hostPeerId, otherPeerId) {
+            if (hostPeerId === otherPeerId) return -1; // Should not happen with distinct peers
+
+            const xorDistance = hostPeerId ^ otherPeerId;
+
+            // Find the index of the least significant bit that is different.
+            for (let i = 0; i < ID_BITS; i++) {
+                if ((xorDistance >> BigInt(i)) & 1n) {
+                    return i;
+                }
+            }
+            // This case should ideally not be reached if IDs are different and ID_BITS is appropriate.
+            // It means all bits are the same, which contradicts hostPeerId !== otherPeerId if xorDistance was non-zero.
+            // If xorDistance is 0, it means IDs are identical, handled by the first check.
+            return ID_BITS -1; // Fallback, though theoretically unreachable with distinct 64-bit IDs.
+        }
+
+        /**
+         * Shuffles an array in place (Fisher-Yates shuffle).
+         * @param {Array} array - The array to shuffle.
+         * @returns {Array} The shuffled array (same instance).
+         */
+        function shuffleArray(array) {
+            for (let i = array.length - 1; i > 0; i--) {
+                const j = Math.floor(Math.random() * (i + 1));
+                [array[i], array[j]] = [array[j], array[i]];
+            }
+            return array;
+        }
+
+        function logMessage(message) {
+            console.log(message);
+            const p = document.createElement('p');
+            p.textContent = `[${new Date().toLocaleTimeString()}] ${message}`;
+            logArea.appendChild(p);
+            logArea.scrollTop = logArea.scrollHeight; // Auto-scroll to bottom
+        }
+
+        // --- Simulation Logic ---
+
+        /**
+         * Initializes the network with a given number of peers.
+         */
+        function initializeNetwork() {
+            logMessage("Initializing network...");
+            peers.clear();
+            totalNodes = parseInt(numNodesInput.value);
+            initialDataHoldersCount = parseInt(initialHoldersInput.value);
+            bucketsToSelectForPropagation = parseInt(bucketsToSelectInput.value);
+
+            if (initialDataHoldersCount > totalNodes) {
+                initialDataHoldersCount = totalNodes;
+                initialHoldersInput.value = totalNodes;
+                logMessage("Warning: Initial holders cannot exceed total nodes. Adjusted.");
+            }
+            if (initialDataHoldersCount < 1 && totalNodes > 0) {
+                initialDataHoldersCount = 1;
+                initialHoldersInput.value = 1;
+                logMessage("Warning: Initial holders must be at least 1. Adjusted.");
+            }
+
+
+            // 1. Create peers with unique IDs
+            const usedIds = new Set();
+            for (let i = 0; i < totalNodes; i++) {
+                let newId;
+                do {
+                    newId = generatePeerId();
+                } while (usedIds.has(newId));
+                usedIds.add(newId);
+                peers.set(newId, new Peer(newId));
+            }
+            logMessage(`Created ${totalNodes} peers with unique IDs.`);
+
+            // 2. Populate buckets for each peer
+            // This is an O(N^2) operation, can be slow for very large N
+            // For simulation, this "perfect knowledge" setup is acceptable.
+            let peerArray = Array.from(peers.values());
+            for (let i = 0; i < peerArray.length; i++) {
+                const hostPeer = peerArray[i];
+                for (let j = 0; j < peerArray.length; j++) {
+                    if (i === j) continue;
+                    const otherPeer = peerArray[j];
+                    hostPeer.addPeerToBucket(otherPeer.id);
+                }
+                if ((i + 1) % (Math.floor(totalNodes / 10) || 1) === 0) {
+                     logMessage(`Populated buckets for ${i + 1}/${totalNodes} peers...`);
+                }
+            }
+            logMessage("All peer buckets populated.");
+
+            networkInitialized = true;
+            simulateButton.disabled = false;
+            setupButton.disabled = true;
+            updateStatsDisplay();
+            logMessage("Network setup complete. Ready to simulate.");
+        }
+
+        /**
+         * Resets the simulation to its initial state before setup.
+         */
+        function resetSimulationState() {
+            currentRound = 0;
+            peersWithDataCount = 0;
+            simulationRunning = false;
+            simulationComplete = false;
+            chartData = [];
+
+            peers.forEach(peer => {
+                peer.hasData = false;
+            });
+
+            logMessage("Simulation state reset.");
+            updateStatsDisplay();
+            drawChart(); // Clear chart
+        }
+
+        /**
+         * Selects initial peers to hold the data.
+         */
+        function selectInitialDataHolders() {
+            if (peers.size === 0 || initialDataHoldersCount === 0) return;
+
+            const peerIds = Array.from(peers.keys());
+            shuffleArray(peerIds); // Shuffle to pick random peers
+
+            for (let i = 0; i < Math.min(initialDataHoldersCount, peerIds.length); i++) {
+                const peer = peers.get(peerIds[i]);
+                if (peer) {
+                    peer.hasData = true;
+                }
+            }
+            peersWithDataCount = countPeersWithData();
+            logMessage(`Selected ${peersWithDataCount} initial data holders.`);
+        }
+
+        /**
+         * Counts how many peers currently have the data.
+         * @returns {number}
+         */
+        function countPeersWithData() {
+            let count = 0;
+            peers.forEach(peer => {
+                if (peer.hasData) {
+                    count++;
+                }
+            });
+            return count;
+        }
+
+        /**
+         * Runs a single round of the simulation.
+         */
+        function runSimulationRound() {
+            if (simulationComplete || peers.size === 0) {
+                simulationRunning = false;
+                updateSimulateButtonState();
+                return;
+            }
+
+            currentRound++;
+            logMessage(`--- Starting Round ${currentRound} ---`);
+
+            const peersWhoCanPropagate = [];
+            peers.forEach(peer => {
+                if (peer.hasData) {
+                    peersWhoCanPropagate.push(peer);
+                }
+            });
+
+            if (peersWhoCanPropagate.length === 0 && peersWithDataCount > 0) {
+                // This should not happen if data exists, unless no one can propagate.
+                logMessage("Warning: Data exists but no peers can propagate it.");
+                simulationComplete = true; // Or handle as an error/stalled state
+                simulationRunning = false;
+                updateSimulateButtonState();
+                return;
+            }
+
+            let newlyInformedCountThisRound = 0;
+            const newReceiversInThisRound = new Set(); // To track who receives data in *this* round specifically
+
+            for (const propagatingPeer of peersWhoCanPropagate) {
+                const targets = propagatingPeer.selectPeersForPropagation();
+                for (const targetId of targets) {
+                    const targetPeer = peers.get(targetId);
+                    if (targetPeer && !targetPeer.hasData) {
+                        // targetPeer.hasData = true; // Mark it, but count based on who receives *now*
+                        newReceiversInThisRound.add(targetPeer);
+                    }
+                }
+            }
+
+            // Now, update hasData for all newly informed peers
+            newReceiversInThisRound.forEach(peer => {
+                if (!peer.hasData) { // Double check, though it should be false from above
+                    peer.hasData = true;
+                    newlyInformedCountThisRound++;
+                }
+            });
+
+            peersWithDataCount += newlyInformedCountThisRound;
+            logMessage(`Round ${currentRound}: ${newlyInformedCountThisRound} new peers received data. Total: ${peersWithDataCount}`);
+
+
+            // Record data for chart
+            const percentage = totalNodes > 0 ? (peersWithDataCount / totalNodes) * 100 : 0;
+            chartData.push({ round: currentRound, count: peersWithDataCount, percentage: percentage });
+
+            updateStatsDisplay();
+            drawChart();
+
+            if (peersWithDataCount === totalNodes) {
+                simulationComplete = true;
+                simulationRunning = false;
+                logMessage(`Simulation complete! All ${totalNodes} peers have the data in ${currentRound} rounds.`);
+                simulationStatusDisplay.textContent = "Completed";
+            } else if (newlyInformedCountThisRound === 0 && peersWithDataCount < totalNodes && peersWithDataCount > 0) {
+                // If no new peers were informed and not everyone has data, the propagation might have stalled.
+                logMessage(`Propagation stalled in Round ${currentRound}. No new peers received data.`);
+                simulationComplete = true; // Consider it complete or stalled
+                simulationRunning = false;
+                simulationStatusDisplay.textContent = "Stalled";
+            }
+
+            updateSimulateButtonState();
+
+            if (simulationRunning) {
+                // Schedule next round
+                setTimeout(runSimulationRound, 100); // Delay for visualization, adjust as needed
+            }
+        }
+
+        /**
+         * Starts or continues the simulation.
+         */
+        function startSimulation() {
+            if (!networkInitialized) {
+                logMessage("Error: Network not initialized. Please click 'Setup Network' first.");
+                return;
+            }
+            if (simulationRunning) {
+                logMessage("Simulation already running.");
+                return;
+            }
+            if (simulationComplete) { // If starting over after completion
+                resetSimulationState(); // Reset counts and flags, but not network structure
+                selectInitialDataHolders(); // Re-select initial holders
+                logMessage("Restarting simulation with current network setup.");
+            } else if (currentRound === 0) { // First time running or after a reset
+                selectInitialDataHolders();
+            }
+
+
+            if (peersWithDataCount === 0 && totalNodes > 0) {
+                logMessage("Error: No initial data holders. Cannot start simulation.");
+                if(initialDataHoldersCount < 1) logMessage("Please set 'Initial Data Holders' to at least 1.");
+                return;
+            }
+            if (peersWithDataCount === totalNodes) {
+                logMessage("All peers already have data. Nothing to simulate.");
+                simulationComplete = true; // Mark as complete for consistency
+                chartData.push({ round: 0, count: peersWithDataCount, percentage: (peersWithDataCount / totalNodes) * 100 });
+                updateStatsDisplay();
+                drawChart();
+                updateSimulateButtonState();
+                return;
+            }
+
+
+            simulationRunning = true;
+            simulationComplete = false;
+            simulationStatusDisplay.textContent = "Running...";
+            logMessage("Simulation started.");
+
+            // Add initial state to chart (Round 0)
+            if (currentRound === 0) {
+                 const initialPercentage = totalNodes > 0 ? (peersWithDataCount / totalNodes) * 100 : 0;
+                 chartData.push({ round: 0, count: peersWithDataCount, percentage: initialPercentage });
+                 updateStatsDisplay();
+                 drawChart();
+            }
+
+            updateSimulateButtonState();
+            runSimulationRound(); // Start the first round
+        }
+
+        function updateSimulateButtonState() {
+            if (!networkInitialized) {
+                simulateButton.disabled = true;
+                simulateButton.textContent = "Start Simulation";
+            } else if (simulationRunning) {
+                simulateButton.disabled = true; // Or implement a "Pause" functionality
+                simulateButton.textContent = "Running...";
+            } else if (simulationComplete) {
+                simulateButton.disabled = false;
+                simulateButton.textContent = "Restart Simulation";
+            } else { // Ready to start or resume (if paused)
+                simulateButton.disabled = false;
+                simulateButton.textContent = "Start Simulation";
+            }
+        }
+
+
+        // --- UI Update Functions ---
+        function updateStatsDisplay() {
+            currentRoundDisplay.textContent = currentRound;
+            totalPeersStatDisplay.textContent = totalNodes;
+            peersWithDataDisplay.textContent = peersWithDataCount;
+            const percentage = totalNodes > 0 ? (peersWithDataCount / totalNodes * 100).toFixed(2) : "0.00";
+            percentagePeersWithDataDisplay.textContent = percentage;
+
+            if (simulationRunning) simulationStatusDisplay.textContent = "Running...";
+            else if (simulationComplete && peersWithDataCount === totalNodes) simulationStatusDisplay.textContent = "Completed";
+            else if (simulationComplete) simulationStatusDisplay.textContent = "Stalled/Ended";
+            else if (networkInitialized) simulationStatusDisplay.textContent = "Ready";
+            else simulationStatusDisplay.textContent = "Idle";
+        }
+
+        // --- Chart Drawing ---
+        function drawChart() {
+            const container = document.getElementById('chartContainer');
+            chartCanvas.width = container.clientWidth;
+            chartCanvas.height = container.clientHeight;
+
+            ctx.clearRect(0, 0, chartCanvas.width, chartCanvas.height);
+
+            if (chartData.length === 0) {
+                ctx.fillStyle = "#777";
+                ctx.textAlign = "center";
+                ctx.fillText("No data to display. Run simulation.", chartCanvas.width / 2, chartCanvas.height / 2);
+                return;
+            }
+
+            const padding = 50;
+            const chartWidth = chartCanvas.width - 2 * padding;
+            const chartHeight = chartCanvas.height - 2 * padding;
+
+            // Determine scales
+            const maxRound = Math.max(1, ...chartData.map(d => d.round)); // Ensure maxRound is at least 1 for scaling
+            const maxPeers = totalNodes;
+
+            const xScale = chartWidth / maxRound;
+            const yScale = chartHeight / maxPeers;
+
+            // Draw Axes
+            ctx.beginPath();
+            ctx.moveTo(padding, padding);
+            ctx.lineTo(padding, chartHeight + padding); // Y-axis
+            ctx.lineTo(chartWidth + padding, chartHeight + padding); // X-axis
+            ctx.strokeStyle = "#333";
+            ctx.stroke();
+
+            // Draw Labels and Ticks
+            ctx.fillStyle = "#333";
+            ctx.textAlign = "center";
+            ctx.fillText("Rounds", padding + chartWidth / 2, chartCanvas.height - padding / 3);
+
+            ctx.save();
+            ctx.translate(padding / 2.5, padding + chartHeight / 2);
+            ctx.rotate(-Math.PI / 2);
+            ctx.fillText("Peers with Data", 0, 0);
+            ctx.restore();
+
+            // X-axis ticks & labels
+            const xTickInterval = Math.max(1, Math.ceil(maxRound / 10)); // Aim for ~10 ticks
+            for (let i = 0; i <= maxRound; i += xTickInterval) {
+                if (i > maxRound && maxRound % xTickInterval !==0) continue; // Don't draw past maxRound unless it's the last one
+                const x = padding + i * xScale;
+                ctx.moveTo(x, chartHeight + padding);
+                ctx.lineTo(x, chartHeight + padding + 5);
+                ctx.stroke();
+                if (i % xTickInterval === 0) { // Label every tick
+                    ctx.fillText(i, x, chartHeight + padding + 20);
+                }
+            }
+            if (maxRound % xTickInterval !== 0) { // Ensure last tick is drawn if not covered
+                const x = padding + maxRound * xScale;
+                 ctx.moveTo(x, chartHeight + padding);
+                ctx.lineTo(x, chartHeight + padding + 5);
+                ctx.stroke();
+                ctx.fillText(maxRound, x, chartHeight + padding + 20);
+            }
+
+
+            // Y-axis ticks & labels
+            ctx.textAlign = "right";
+            const yTickInterval = Math.max(1, Math.ceil(maxPeers / 10)); // Aim for ~10 ticks
+            for (let i = 0; i <= maxPeers; i += yTickInterval) {
+                if (i > maxPeers && maxPeers % yTickInterval !==0) continue;
+                const y = chartHeight + padding - i * yScale;
+                ctx.moveTo(padding, y);
+                ctx.lineTo(padding - 5, y);
+                ctx.stroke();
+                if (i % yTickInterval === 0) { // Label every tick
+                     ctx.fillText(i, padding - 10, y + 3); // Adjust for text alignment
+                }
+            }
+             if (maxPeers % yTickInterval !== 0) { // Ensure last tick is drawn if not covered
+                const y = chartHeight + padding - maxPeers * yScale;
+                ctx.moveTo(padding, y);
+                ctx.lineTo(padding - 5, y);
+                ctx.stroke();
+                ctx.fillText(maxPeers, padding - 10, y + 3);
+            }
+
+
+            // Draw Data Line (Peers Count)
+            ctx.beginPath();
+            ctx.moveTo(padding + chartData[0].round * xScale, chartHeight + padding - chartData[0].count * yScale);
+            for (let i = 1; i < chartData.length; i++) {
+                ctx.lineTo(padding + chartData[i].round * xScale, chartHeight + padding - chartData[i].count * yScale);
+            }
+            ctx.strokeStyle = "#007bff";
+            ctx.lineWidth = 2;
+            ctx.stroke();
+
+            // Draw Data Points
+            ctx.fillStyle = "#007bff";
+            for (const dataPoint of chartData) {
+                ctx.beginPath();
+                ctx.arc(
+                    padding + dataPoint.round * xScale,
+                    chartHeight + padding - dataPoint.count * yScale,
+                    3, 0, 2 * Math.PI
+                );
+                ctx.fill();
+            }
+            ctx.lineWidth = 1; // Reset line width
+        }
+
+        // --- Event Listeners ---
+        setupButton.addEventListener('click', () => {
+            resetSimulationState(); // Clear previous simulation run data if any
+            logArea.innerHTML = ''; // Clear logs
+            initializeNetwork();
+        });
+
+        simulateButton.addEventListener('click', () => {
+            if (!networkInitialized) {
+                alert("Please set up the network first!");
+                return;
+            }
+            startSimulation();
+        });
+
+        resetButton.addEventListener('click', () => {
+            // Full reset: configuration, network, simulation state
+            numNodesInput.value = "1000";
+            initialHoldersInput.value = "3";
+            bucketsToSelectInput.value = "8";
+
+            peers.clear();
+            networkInitialized = false;
+            resetSimulationState(); // Resets sim variables and clears chart data
+
+            setupButton.disabled = false;
+            simulateButton.disabled = true;
+            simulateButton.textContent = "Start Simulation";
+
+            logArea.innerHTML = ''; // Clear logs
+            logMessage("Full reset complete. Configure and Setup Network.");
+            updateStatsDisplay();
+            drawChart();
+        });
+
+        // Initial Chart Draw (empty) and UI state
+        window.addEventListener('load', () => {
+            drawChart();
+            updateStatsDisplay();
+            updateSimulateButtonState();
+            logMessage("Adjust configuration and click 'Setup Network'.");
+        });
+        // Redraw chart on resize (optional, but good for responsiveness)
+        let resizeTimer;
+        window.addEventListener('resize', () => {
+            clearTimeout(resizeTimer);
+            resizeTimer = setTimeout(drawChart, 250);
+        });
+
+    </script>
+</body>
+</html>
