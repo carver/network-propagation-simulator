@@ -110,6 +110,7 @@
             <h2>Simulation Status</h2>
             <p>Round: <span id="currentRound">0</span></p>
             <p>Peers with Data: <span id="peersWithData">0</span> / <span id="totalPeersStat">0</span> (<span id="percentagePeersWithData">0.00</span>%)</p>
+            <p>Messages Received: <span id="messageCount">0</span> (<span id="messagesPerPeer">0.00</span> per peer)</p>
             <p>Status: <span id="simulationStatus">Idle</span></p>
         </div>
 
@@ -151,6 +152,8 @@
         const peersWithDataDisplay = document.getElementById('peersWithData');
         const totalPeersStatDisplay = document.getElementById('totalPeersStat');
         const percentagePeersWithDataDisplay = document.getElementById('percentagePeersWithData');
+        const messageCountDisplay = document.getElementById('messageCount');
+        const messagesPerPeerDisplay = document.getElementById('messagesPerPeer');
         const simulationStatusDisplay = document.getElementById('simulationStatus');
         const chartCanvas = document.getElementById('propagationChart');
         const ctx = chartCanvas.getContext('2d');
@@ -506,6 +509,7 @@
             }
 
             let newlyInformedCountThisRound = 0;
+            let duplicateMessages = 0;
             const newReceiversInThisRound = new Set(); // To track who receives data in *this* round specifically
 
             const reGossipCount = document.getElementById('reGossipCount').value;
@@ -513,9 +517,14 @@
                 const targets = propagatingPeer.selectPeersForPropagation(reGossipCount);
                 for (const targetId of targets) {
                     const targetPeer = peers.get(targetId);
-                    if (targetPeer && !targetPeer.hasData) {
-                        // targetPeer.hasData = true; // Mark it, but count based on who receives *now*
+                    if (!targetPeer) {
+                      logMessage(`picked an invalid peer: ${targetId}`);
+                    }
+                    else if (!targetPeer.hasData) {
                         newReceiversInThisRound.add(targetPeer);
+                    }
+                    else {
+                      duplicateMessages++;
                     }
                 }
             }
@@ -536,7 +545,7 @@
             const percentage = totalNodes > 0 ? (peersWithDataCount / totalNodes) * 100 : 0;
             chartData.push({ round: currentRound, count: peersWithDataCount, percentage: percentage });
 
-            updateStatsDisplay();
+            updateStatsDisplay(newlyInformedCountThisRound + duplicateMessages);
             drawChart();
 
             // logStatsOfRandomPeer()
@@ -642,12 +651,15 @@
 
 
         // --- UI Update Functions ---
-        function updateStatsDisplay() {
+        function updateStatsDisplay(newMessages=0) {
             currentRoundDisplay.textContent = currentRound;
             totalPeersStatDisplay.textContent = totalNodes;
             peersWithDataDisplay.textContent = peersWithDataCount;
             const percentage = totalNodes > 0 ? (peersWithDataCount / totalNodes * 100).toFixed(2) : "0.00";
             percentagePeersWithDataDisplay.textContent = percentage;
+            const totalMessages = parseInt(messageCountDisplay.textContent) + newMessages;
+            messageCountDisplay.textContent = totalMessages;
+            messagesPerPeerDisplay.textContent = totalNodes > 0 ? (totalMessages / totalNodes).toFixed(2) : "0";
 
             if (simulationRunning) simulationStatusDisplay.textContent = "Running...";
             else if (simulationComplete && peersWithDataCount === totalNodes) simulationStatusDisplay.textContent = "Completed";
@@ -780,6 +792,7 @@
                 alert("Please set up the network first!");
                 return;
             }
+            messageCountDisplay.textContent = "0";
             startSimulation();
         });
 
@@ -790,6 +803,7 @@
             initialHoldersInput.value = "3";
             bucketsToSelectInput.value = "8";
             */
+            messageCountDisplay.textContent = "0";
 
             peers.clear();
             networkInitialized = false;
