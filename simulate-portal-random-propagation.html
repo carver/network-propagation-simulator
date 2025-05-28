@@ -102,6 +102,16 @@
             <label for="initialHolders">Initial Data Holders:</label>
             <input type="number" id="initialHolders" value="3" min="1">
             <br>
+            <label for="gossipStrategy">How to choose peers</label>
+            <select id="gossipStrategy">
+                <option value="selectRandomPeersForPropagation">N Random Buckets -> 1 Random Peer</option>
+                <option value="selectSplitPeersForPropagation">1/2 Random Buckets; 1/2 Closest Buckets</option>
+                <option value="select1RandomRestClosestForPropagation">1 Random Bucket; N-1 Closest Buckets</option>
+                <option value="selectRandomPeersFromFurthestBuckets">Select N Furthest Buckets -> 1 Random Peer</option>
+                <option value="selectRandomPeersFromClosestBuckets">Select N Closest Buckets -> 1 Random Peer</option>
+                <option value="selectClosestPeersForPropagation">Select N Closest Peers</option>
+            </select>
+            <br>
             <button id="simulateButton" disabled>Start Simulation</button>
         </div>
 
@@ -144,6 +154,7 @@
         const numNodesInput = document.getElementById('numNodes');
         const initialHoldersInput = document.getElementById('initialHolders');
         // const peersPerBucketInput = document.getElementById('peersPerBucket'); // Not used, fixed BUCKET_SIZE
+        const propagationSelectorInput = document.getElementById('gossipStrategy');
         const setupButton = document.getElementById('setupButton');
         const simulateButton = document.getElementById('simulateButton');
         const resetButton = document.getElementById('resetButton');
@@ -219,18 +230,25 @@
              * @returns {BigInt[]} - Array of peer IDs to send data to.
              */
             selectPeersForPropagation(numToGossip) {
-              return Array.from(this.selectSplitPeersForPropagation(numToGossip));
+              const propagationFunc = this[propagationSelectorInput.value].bind(this);
+              return Array.from(propagationFunc(numToGossip));
             }
             selectSplitPeersForPropagation(numToGossip) {
 
                 // Split bucket selection into two strategies:
                 // - Randomly select N buckets and pick one random peer from each.
                 // - Select N closest peers to self
-                let numRandomPeers = Math.floor(numToGossip / 2);
-                let randomPeers = this.selectRandomPeersForPropagation(numRandomPeers);
-                let closestPeers = this.selectClosestPeersForPropagation(numToGossip - numRandomPeers);
-                //let closestPeers = this.selectRandomPeersFromClosestBuckets(numToGossip - numRandomPeers);
-                return Array.from(randomPeers.union(closestPeers));
+                const numRandomPeers = Math.floor(numToGossip / 2);
+                const numClosePeers = numToGossip - numRandomPeers;
+                return this.selectJointRandomAndClosestBucketsForPropagation(numRandomPeers, numClosePeers);
+            }
+            select1RandomRestClosestForPropagation(numToGossip) {
+              return this.selectJointRandomAndClosestBucketsForPropagation(1, numToGossip - 1);
+            }
+            selectJointRandomAndClosestBucketsForPropagation(numRandomPeers, numClosestPeers) {
+              let randomPeers = this.selectRandomPeersForPropagation(numRandomPeers);
+              let closestPeers = this.selectRandomPeersFromClosestBuckets(numClosestPeers);
+              return randomPeers.union(closestPeers);
             }
 
             selectClosestPeersForPropagation(numPeers) {
