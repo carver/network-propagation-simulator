@@ -87,11 +87,8 @@
             <label for="numNodes">Number of Nodes:</label>
             <input type="number" id="numNodes" value="1000" min="10">
 
-            <label for="initialHolders">Initial Data Holders:</label>
-            <input type="number" id="initialHolders" value="3" min="1">
-
             <label for="peersPerBucket">Peers per Bucket (K):</label>
-            <input type="number" id="peersPerBucket" value="16" min="1" max="20" readonly> <!-- Kademlia typically uses K=20, but question specified 16 -->
+            <input type="number" id="peersPerBucket" value="16" min="1" max="20" disabled> <!-- Kademlia typically uses K=20, but question specified 16 -->
 
             <br>
             <button id="setupButton">Setup Network</button>
@@ -102,6 +99,8 @@
             <h2>Simulation Configuration</h2>
             <label for="reGossipCount">Number of peers to gossip to</label>
             <input type="number" id="reGossipCount" value="8" min="1">
+            <label for="initialHolders">Initial Data Holders:</label>
+            <input type="number" id="initialHolders" value="3" min="1">
             <br>
             <button id="simulateButton" disabled>Start Simulation</button>
         </div>
@@ -384,18 +383,6 @@
             logMessage("Initializing network...");
             peers.clear();
             totalNodes = parseInt(numNodesInput.value);
-            initialDataHoldersCount = parseInt(initialHoldersInput.value);
-
-            if (initialDataHoldersCount > totalNodes) {
-                initialDataHoldersCount = totalNodes;
-                initialHoldersInput.value = totalNodes;
-                logMessage("Warning: Initial holders cannot exceed total nodes. Adjusted.");
-            }
-            if (initialDataHoldersCount < 1 && totalNodes > 0) {
-                initialDataHoldersCount = 1;
-                initialHoldersInput.value = 1;
-                logMessage("Warning: Initial holders must be at least 1. Adjusted.");
-            }
 
 
             // 1. Create peers with unique IDs
@@ -457,6 +444,19 @@
          * Selects initial peers to hold the data.
          */
         function selectInitialDataHolders() {
+            initialDataHoldersCount = parseInt(initialHoldersInput.value);
+
+            if (initialDataHoldersCount > totalNodes) {
+                initialDataHoldersCount = totalNodes;
+                initialHoldersInput.value = totalNodes;
+                logMessage("Warning: Initial holders cannot exceed total nodes. Adjusted.");
+            }
+            if (initialDataHoldersCount < 1 && totalNodes > 0) {
+                initialDataHoldersCount = 1;
+                initialHoldersInput.value = 1;
+                logMessage("Warning: Initial holders must be at least 1. Adjusted.");
+            }
+
             if (peers.size === 0 || initialDataHoldersCount === 0) return;
 
             const peerIds = Array.from(peers.keys());
