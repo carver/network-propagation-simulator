@@ -104,6 +104,7 @@
             <br>
             <label for="gossipStrategy">How to choose peers</label>
             <select id="gossipStrategy">
+                <option value="selectRandomPeerFromEachBucket">All Buckets -> 1 Random Peer</option>
                 <option value="selectSplitPeersForPropagation">1/2 Random Buckets; 1/2 Closest Buckets</option>
                 <option value="select1RandomRestClosestForPropagation">1 Random Bucket; N-1 Closest Buckets</option>
                 <option value="selectRandomPeersForPropagation">N Random Buckets -> 1 Random Peer</option>
@@ -325,6 +326,21 @@
                         const randomPeerIdInBucket = bucket[Math.floor(Math.random() * bucket.length)];
                         targets.add(randomPeerIdInBucket);
                     }
+                }
+                return targets;
+            }
+            selectRandomPeerFromEachBucket(numToGossip) {
+                // Note that this IGNORES the number of peers to gossip to, and always gossips to one random peer from each bucket.
+                const targets = new Set(); // Use a Set to avoid duplicates
+
+                // Get non-empty buckets
+                const nonEmptyBuckets = this.buckets.filter(bucket => bucket.length > 0);
+
+                // Select N random peers from the shuffled list of non-empty buckets
+                for (let i = 0; i < nonEmptyBuckets.length; i++) {
+                    const bucket = nonEmptyBuckets[i];
+                    const randomPeerIdInBucket = bucket[Math.floor(Math.random() * bucket.length)];
+                    targets.add(randomPeerIdInBucket);
                 }
                 return targets;
             }
