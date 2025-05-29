@@ -108,6 +108,7 @@
                 <option value="selectSplitPeersForPropagation">1/2 Random Buckets; 1/2 Closest Buckets</option>
                 <option value="select1RandomRestClosestForPropagation">1 Random Bucket; N-1 Closest Buckets</option>
                 <option value="selectRandomPeersForPropagation">N Random Buckets -> 1 Random Peer</option>
+                <option value="selectRandomPeersAcrossBuckets">N Random Peers Across All Buckets</option>
                 <option value="selectRandomPeersFromClosestBuckets">Select N Closest Buckets -> 1 Random Peer</option>
                 <option value="selectRandomPeersFromFurthestBuckets">Select N Furthest Buckets -> 1 Random Peer</option>
                 <option value="selectClosestPeersForPropagation">Select N Closest Peers</option>
@@ -326,6 +327,24 @@
                         const randomPeerIdInBucket = bucket[Math.floor(Math.random() * bucket.length)];
                         targets.add(randomPeerIdInBucket);
                     }
+                }
+                return targets;
+            }
+            selectRandomPeersAcrossBuckets(numToGossip) {
+                const targets = new Set(); // Use a Set to avoid duplicates
+
+                // Get all peer IDs from all buckets
+                const allPeerIds = [];
+                for (const bucket of this.buckets) {
+                    allPeerIds.push(...bucket);
+                }
+
+                // Shuffle the array of all peer IDs
+                shuffleArray(allPeerIds);
+
+                // Select N random peers from the shuffled list
+                for (let i = 0; i < Math.min(numToGossip, allPeerIds.length); i++) {
+                    targets.add(allPeerIds[i]);
                 }
                 return targets;
             }
